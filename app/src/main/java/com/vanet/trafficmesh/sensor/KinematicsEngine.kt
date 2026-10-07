@@ -8,7 +8,6 @@ import android.hardware.SensorManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.math.abs
 
 class KinematicsEngine(context: Context) : SensorEventListener {
 
@@ -16,7 +15,6 @@ class KinematicsEngine(context: Context) : SensorEventListener {
     private val accelSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val gyroSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
-    // Upgraded state to include rotation (Yaw Rate)
     data class MotionState(
         val longitudinalAcceleration: Float = 0f,
         val isEmergencyBraking: Boolean = false,
@@ -27,7 +25,7 @@ class KinematicsEngine(context: Context) : SensorEventListener {
     val motionState: StateFlow<MotionState> = _motionState.asStateFlow()
 
     private var smoothedAccelY = 0f
-    private val alpha = 0.2f // Low-pass filter constant for accelerometer
+    private val alpha = 0.2f
 
     fun start() {
         accelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
@@ -46,24 +44,16 @@ class KinematicsEngine(context: Context) : SensorEventListener {
 
         when (event.sensor.type) {
             Sensor.TYPE_LINEAR_ACCELERATION -> {
-                // Assuming phone is upright, Y-axis tracks forward/backward acceleration
                 smoothedAccelY = alpha * event.values[1] + (1 - alpha) * smoothedAccelY
                 currentBraking = smoothedAccelY < -4.0f
             }
             Sensor.TYPE_GYROSCOPE -> {
-                // Gyroscope outputs radians per second.
-                // Assuming phone is upright, the Y-axis (values[1]) tracks left/right rotation.
                 val yawRateRad = event.values[1]
                 currentYawRate = Math.toDegrees(yawRateRad.toDouble()).toFloat()
             }
         }
 
-        // Push the combined sensor fusion data to the UI
-        _motionState.value = MotionState(
-            longitudinalAcceleration = smoothedAccelY,
-            isEmergencyBraking = currentBraking,
-            yawRateDegrees = currentYawRate
-        )
+        _motionState.value = MotionState(smoothedAccelY, currentBraking, currentYawRate)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

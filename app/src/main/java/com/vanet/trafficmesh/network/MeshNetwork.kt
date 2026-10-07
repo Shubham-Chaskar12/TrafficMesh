@@ -15,37 +15,28 @@ class MeshNetwork(private val context: Context) {
 
     private val strategy = Strategy.P2P_CLUSTER
     private val connectionsClient = Nearby.getConnectionsClient(context)
-    val myNodeId = (1000..9999).random() // Changed to an Int so it fits in our 16-byte packet
+    val myNodeId = (1000..9999).random()
 
     private val connectedEndpoints = mutableListOf<String>()
+    private val processedPackets = LinkedHashSet<String>()
 
-    // Now we emit the full decoded packet instead of just a String
     private val _incomingTelemetry = MutableSharedFlow<VehicleTelemetryPacket>()
     val incomingTelemetry = _incomingTelemetry.asSharedFlow()
 
     fun startMesh() {
-        Log.d("TrafficMesh", "Starting Google Nearby Mesh as Node: $myNodeId")
-        startAdvertising()
-        startDiscovery()
-    }
-
-    private fun startAdvertising() {
         val options = AdvertisingOptions.Builder().setStrategy(strategy).build()
         connectionsClient.startAdvertising(myNodeId.toString(), context.packageName, connectionLifecycleCallback, options)
+
+        val discoveryOptions = DiscoveryOptions.Builder().setStrategy(strategy).build()
+        connectionsClient.startDiscovery(context.packageName, endpointDiscoveryCallback, discoveryOptions)
     }
 
-    private fun startDiscovery() {
-        val options = DiscoveryOptions.Builder().setStrategy(strategy).build()
-        connectionsClient.startDiscovery(context.packageName, endpointDiscoveryCallback, options)
-    }
+    fun broadcastTelemetry(packet: VehicleTelemetryPacket, excludeEndpointId: String? = null) {
+        val targets = connectedEndpoints.filter { it != excludeEndpointId }
+        if (targets.isEmpty()) return
 
-    // NEW: Function to broadcast our live telemetry packet continuously
-    fun broadcastTelemetry(packet: VehicleTelemetryPacket) {
-        if (connectedEndpoints.isEmpty()) return
-
-        // Convert our packet into a 16-byte array and send it
         val payload = Payload.fromBytes(packet.toByteArray())
-        connectionsClient.sendPayload(connectedEndpoints, payload)
+        connectionsClient.sendPayload(targets, payload)
     }
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
@@ -60,7 +51,9 @@ class MeshNetwork(private val context: Context) {
             connectionsClient.acceptConnection(endpointId, payloadCallback)
         }
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
-            if (result.status.isSuccess) connectedEndpoints.add(endpointId)
+            if (result.status.isSuccess && !connectedEndpoints.contains(endpointId)) {
+                connectedEndpoints.add(endpointId)
+            }
         }
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
@@ -70,13 +63,22 @@ class MeshNetwork(private val context: Context) {
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             val data = payload.asBytes()
-            // Ensure we only process packets that are exactly 16 bytes
-            if (data != null && data.size == 16) {
+            if (data != null && data.size == 24) { // Checked for new 24 byte size
                 val packet = VehicleTelemetryPacket.fromByteArray(data)
+                val messageSignature = "${packet.nodeId}_${packet.timestampMs}"
 
-                // Send the decoded packet up to the UI
-                CoroutineScope(Dispatchers.Main).launch {
-                    _incomingTelemetry.emit(packet)
+                if (!processedPackets.contains(messageSignature)) {
+                    processedPackets.add(messageSignature)
+                    if (processedPackets.size > 200) processedPackets.remove(processedPackets.first())
+
+                    CoroutineScope(Dispatchers.Main).launch {
+                        _incomingTelemetry.emit(packet)
+                    }
+
+                    if (packet.conditionCode > 0 && packet.ttl > 0) {
+                        val forwardedPacket = packet.copy(ttl = (packet.ttl - 1).toByte())
+                        broadcastTelemetry(forwardedPacket, excludeEndpointId = endpointId)
+                    }
                 }
             }
         }
@@ -87,5 +89,7 @@ class MeshNetwork(private val context: Context) {
         connectionsClient.stopAllEndpoints()
         connectionsClient.stopAdvertising()
         connectionsClient.stopDiscovery()
+        connectedEndpoints.clear()
+        processedPackets.clear()
     }
 }

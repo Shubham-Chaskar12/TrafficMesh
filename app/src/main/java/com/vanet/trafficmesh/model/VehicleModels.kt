@@ -2,7 +2,7 @@ package com.vanet.trafficmesh.model
 
 import java.nio.ByteBuffer
 
-// --- 1. UI DIMENSIONS (Used by RadarView to draw the car) ---
+// --- 1. UI DIMENSIONS ---
 enum class VehicleType(val displayName: String, val widthMeters: Float, val lengthMeters: Float) {
     HATCHBACK("Hatchback", 1.7f, 4.0f),
     SEDAN("Sedan", 1.9f, 4.8f),
@@ -10,23 +10,29 @@ enum class VehicleType(val displayName: String, val widthMeters: Float, val leng
     TRUCK("Truck", 2.5f, 7.5f)
 }
 
-// --- 2. NETWORK PACKET (Your stable 16-byte baseline) ---
+// --- 2. THE 24-BYTE MESH PACKET ---
 data class VehicleTelemetryPacket(
     val nodeId: Int,
     val timestampMs: Int,
+    val lat: Float,
+    val lon: Float,
     val speedKmh: Short,
     val headingDeg: Short,
     val longitudinalG: Short,
-    val hazardFlag: Short
+    val conditionCode: Byte,
+    val ttl: Byte
 ) {
     fun toByteArray(): ByteArray {
-        val buffer = ByteBuffer.allocate(16)
+        val buffer = ByteBuffer.allocate(24)
         buffer.putInt(nodeId)
         buffer.putInt(timestampMs)
+        buffer.putFloat(lat)
+        buffer.putFloat(lon)
         buffer.putShort(speedKmh)
         buffer.putShort(headingDeg)
         buffer.putShort(longitudinalG)
-        buffer.putShort(hazardFlag)
+        buffer.put(conditionCode)
+        buffer.put(ttl)
         return buffer.array()
     }
 
@@ -36,10 +42,13 @@ data class VehicleTelemetryPacket(
             return VehicleTelemetryPacket(
                 nodeId = buffer.int,
                 timestampMs = buffer.int,
+                lat = buffer.float,
+                lon = buffer.float,
                 speedKmh = buffer.short,
                 headingDeg = buffer.short,
                 longitudinalG = buffer.short,
-                hazardFlag = buffer.short
+                conditionCode = buffer.get(),
+                ttl = buffer.get()
             )
         }
     }

@@ -5,37 +5,74 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.view.View
 import com.vanet.trafficmesh.model.VehicleType
 
 class RadarView(context: Context) : View(context) {
 
-    private val bgPaint = Paint().apply { color = Color.parseColor("#1A1A2E") }
-    private val linePaint = Paint().apply {
-        color = Color.parseColor("#4A4E69")
-        strokeWidth = 8f
-        pathEffect = DashPathEffect(floatArrayOf(40f, 40f), 0f)
+    init {
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
     }
-    private val egoPaint = Paint().apply { color = Color.parseColor("#00FF87") }
-    private val peerPaint = Paint().apply { color = Color.parseColor("#60A5FA") }
-    private val hazardPaint = Paint().apply { color = Color.parseColor("#FF3366") }
 
-    private val textPaint = Paint().apply {
+    private val bgPaint = Paint().apply { color = Color.parseColor("#1C1E26") }
+
+    private val linePaint = Paint().apply {
+        color = Color.parseColor("#6C6F7D")
+        strokeWidth = 6f // Slightly thinner to fit 5 lanes nicely
+        pathEffect = DashPathEffect(floatArrayOf(60f, 40f), 0f)
+    }
+
+    private val meshLinkPaint = Paint().apply {
+        color = Color.parseColor("#00FFFF")
+        strokeWidth = 5f
+        isAntiAlias = true
+        alpha = 220
+        setShadowLayer(20f, 0f, 0f, Color.parseColor("#00FFFF"))
+    }
+
+    private val egoPaint = Paint().apply {
+        color = Color.parseColor("#00FF87")
+        setShadowLayer(35f, 0f, 0f, Color.parseColor("#00FF87"))
+    }
+
+    private val peerPaint = Paint().apply {
+        color = Color.parseColor("#3399FF")
+        setShadowLayer(35f, 0f, 0f, Color.parseColor("#3399FF"))
+    }
+
+    private val hazardPaint = Paint().apply {
+        color = Color.parseColor("#FF2A55")
+        setShadowLayer(45f, 0f, 0f, Color.parseColor("#FF2A55"))
+    }
+
+    private val cabinPaint = Paint().apply {
+        color = Color.parseColor("#15161C")
+        isAntiAlias = true
+    }
+
+    private val labelPaint = Paint().apply {
+        color = Color.parseColor("#A0A2AB")
+        textSize = 20f
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        isAntiAlias = true
+    }
+
+    private val carTextPaint = Paint().apply {
         color = Color.WHITE
-        textSize = 30f
+        textSize = 20f
         textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         isAntiAlias = true
     }
 
     var isEgoBraking = false
-
-    // Default to a standard Sedan
     var egoVehicle = VehicleType.SEDAN
+    var egoRotationDegrees = 0f
 
-    // 1 physical meter equals 25 pixels on the screen
-    private val PIXELS_PER_METER = 25f
+    private val PIXELS_PER_METER = 45f
 
-    data class RadarNode(val id: String, val distanceMeters: Float, val isBraking: Boolean, val type: VehicleType = VehicleType.SEDAN)
+    data class RadarNode(val id: String, val deltaXMeters: Float, val deltaYMeters: Float, val isHazard: Boolean, val type: VehicleType)
     var activeNodes = listOf<RadarNode>()
 
     override fun onDraw(canvas: Canvas) {
@@ -43,41 +80,57 @@ class RadarView(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
 
-        // Background & Lanes
         canvas.drawRect(0f, 0f, w, h, bgPaint)
-        canvas.drawLine(w * 0.25f, 0f, w * 0.25f, h, linePaint)
-        canvas.drawLine(w * 0.75f, 0f, w * 0.75f, h, linePaint)
 
-        // Calculate EGO (Your Car) exact pixel dimensions based on the chosen type
+        // DRAW 5 LANES (Requires 4 dividing lines at 20%, 40%, 60%, 80%)
+        canvas.drawLine(w * 0.2f, 0f, w * 0.2f, h, linePaint)
+        canvas.drawLine(w * 0.4f, 0f, w * 0.4f, h, linePaint)
+        canvas.drawLine(w * 0.6f, 0f, w * 0.6f, h, linePaint)
+        canvas.drawLine(w * 0.8f, 0f, w * 0.8f, h, linePaint)
+
+        // Ego vehicle is locked to the dead center (Lane 3)
         val egoX = w / 2f
-        val egoY = h * 0.85f
-        val halfWidth = (egoVehicle.widthMeters * PIXELS_PER_METER) / 2f
-        val halfLength = (egoVehicle.lengthMeters * PIXELS_PER_METER) / 2f
+        val egoY = h * 0.50f
 
-        // Draw Your Car scaled to its real size
-        canvas.drawRoundRect(
-            egoX - halfWidth, egoY - halfLength,
-            egoX + halfWidth, egoY + halfLength,
-            15f, 15f,
-            if (isEgoBraking) hazardPaint else egoPaint
-        )
-        canvas.drawText(egoVehicle.displayName, egoX, egoY + halfLength + 40f, textPaint)
-
-        // Draw the Ghost Cars (also scaled to their specific dimensions)
-        activeNodes.forEach { node ->
-            val nodeX = w / 2f
-            val nodeY = egoY - (node.distanceMeters * PIXELS_PER_METER) // Keep visual distance accurate to scale
-
-            val nHalfW = (node.type.widthMeters * PIXELS_PER_METER) / 2f
-            val nHalfL = (node.type.lengthMeters * PIXELS_PER_METER) / 2f
-
-            canvas.drawRoundRect(
-                nodeX - nHalfW, nodeY - nHalfL,
-                nodeX + nHalfW, nodeY + nHalfL,
-                15f, 15f,
-                if (node.isBraking) hazardPaint else peerPaint
-            )
-            canvas.drawText("CAR ${node.id}", nodeX, nodeY - nHalfL - 20f, textPaint)
+        val distanceMarkers = listOf(15f, 30f, -15f)
+        distanceMarkers.forEach { dist ->
+            val markY = egoY - (dist * PIXELS_PER_METER)
+            canvas.drawText("${Math.abs(dist).toInt()}m", 20f, markY - 10f, labelPaint)
+            canvas.drawLine(0f, markY, w, markY, Paint().apply { color = Color.parseColor("#2A2D38"); strokeWidth = 3f })
         }
+
+        // 1. DRAW MESH CONNECTIONS
+        activeNodes.forEach { node ->
+            val nodeX = egoX + (node.deltaXMeters * PIXELS_PER_METER)
+            val nodeY = egoY - (node.deltaYMeters * PIXELS_PER_METER)
+            canvas.drawLine(egoX, egoY, nodeX, nodeY, meshLinkPaint)
+        }
+
+        // 2. DRAW EGO CAR
+        drawVehicle(canvas, egoX, egoY, egoVehicle, if (isEgoBraking) hazardPaint else egoPaint, "YOU", egoRotationDegrees)
+
+        // 3. DRAW PEER CARS
+        activeNodes.forEach { node ->
+            val nodeX = egoX + (node.deltaXMeters * PIXELS_PER_METER)
+            val nodeY = egoY - (node.deltaYMeters * PIXELS_PER_METER)
+            drawVehicle(canvas, nodeX, nodeY, node.type, if (node.isHazard) hazardPaint else peerPaint, node.id, 0f)
+        }
+    }
+
+    private fun drawVehicle(canvas: Canvas, x: Float, y: Float, type: VehicleType, bodyPaint: Paint, label: String, rotationDegrees: Float) {
+        canvas.save()
+        canvas.rotate(rotationDegrees, x, y)
+        val w = (type.widthMeters * PIXELS_PER_METER) / 2f
+        val l = (type.lengthMeters * PIXELS_PER_METER) / 2f
+
+        canvas.drawRoundRect(x - w, y - l, x + w, y + l, 16f, 16f, bodyPaint)
+
+        val roofW = w * 0.75f
+        val roofL = l * 0.60f
+        val roofOffsetY = l * 0.1f
+
+        canvas.drawRoundRect(x - roofW, (y - roofL) + roofOffsetY, x + roofW, (y + roofL) + roofOffsetY, 8f, 8f, cabinPaint)
+        canvas.drawText(label, x, y + roofOffsetY + 7f, carTextPaint)
+        canvas.restore()
     }
 }
