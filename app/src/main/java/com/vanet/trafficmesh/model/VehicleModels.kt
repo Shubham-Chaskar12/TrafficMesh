@@ -2,14 +2,15 @@ package com.vanet.trafficmesh.model
 
 import java.nio.ByteBuffer
 
-enum class VehicleType(val displayName: String, val lengthMeters: Float, val widthMeters: Float) {
-    TWO_WHEELER("Two-Wheeler", 2.0f, 0.8f),
-    HATCHBACK("Hatchback", 3.8f, 1.7f),
-    SEDAN("Sedan", 4.6f, 1.8f),
-    SUV("SUV / Van", 4.9f, 1.9f),
-    HEAVY_VEHICLE("Bus / Truck", 10.5f, 2.5f)
+// --- 1. UI DIMENSIONS (Used by RadarView to draw the car) ---
+enum class VehicleType(val displayName: String, val widthMeters: Float, val lengthMeters: Float) {
+    HATCHBACK("Hatchback", 1.7f, 4.0f),
+    SEDAN("Sedan", 1.9f, 4.8f),
+    SUV("SUV", 2.0f, 5.2f),
+    TRUCK("Truck", 2.5f, 7.5f)
 }
 
+// --- 2. NETWORK PACKET (Your stable 16-byte baseline) ---
 data class VehicleTelemetryPacket(
     val nodeId: Int,
     val timestampMs: Int,

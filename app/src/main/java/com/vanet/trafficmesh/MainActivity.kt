@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.vanet.trafficmesh.model.VehicleTelemetryPacket
+import com.vanet.trafficmesh.model.VehicleType
 import com.vanet.trafficmesh.network.MeshNetwork
 import com.vanet.trafficmesh.sensor.KinematicsEngine
 import com.vanet.trafficmesh.sensor.LocationTracker
@@ -25,37 +27,58 @@ class MainActivity : AppCompatActivity() {
     private lateinit var meshNetwork: MeshNetwork
 
     private lateinit var statusText: TextView
-    private lateinit var radarView: RadarView // Our new graphical UI
+    private lateinit var radarView: RadarView
 
     private var isShowingAlert = false
 
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) {
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         startAllSystems()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. Setup the graphical Radar View to take up the top portion of the screen
+        // 1. Setup the Radar UI
         radarView = RadarView(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
         }
 
-        // 2. Setup the Text View to sit at the bottom
+        // 2. Setup the interactive Car Selector Buttons
+        val btnLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(10, 20, 10, 20)
+            gravity = android.view.Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#1A1A2E"))
+        }
+
+        val types = listOf(VehicleType.HATCHBACK, VehicleType.SEDAN, VehicleType.SUV, VehicleType.TRUCK)
+        types.forEach { vehicle ->
+            val btn = Button(this).apply {
+                text = vehicle.displayName
+                textSize = 12f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener {
+                    radarView.egoVehicle = vehicle
+                    radarView.invalidate() // Redraw the UI instantly
+                }
+            }
+            btnLayout.addView(btn)
+        }
+
+        // 3. Setup the Status Text
         statusText = TextView(this).apply {
             textSize = 20f
-            setPadding(40, 60, 40, 60)
+            setPadding(40, 40, 40, 60)
             text = "Initializing Systems..."
             setTextColor(Color.WHITE)
         }
 
-        // 3. Stack them together vertically
+        // 4. Stack them vertically
         val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#121212")) // Very dark grey
+            setBackgroundColor(Color.parseColor("#121212"))
             addView(radarView)
+            addView(btnLayout)
             addView(statusText)
         }
 
@@ -103,6 +126,7 @@ class MainActivity : AppCompatActivity() {
                 val gps = locationTracker.gpsState.value
                 val hazard: Short = if (motion.isEmergencyBraking) 1 else 0
 
+                // Broadcasting our stable 16-byte packet
                 val packet = VehicleTelemetryPacket(
                     nodeId = meshNetwork.myNodeId,
                     timestampMs = System.currentTimeMillis().toInt(),
@@ -117,26 +141,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 👻 The Ghost Car Simulator now controls the visual graphics!
     private fun startGhostCarSimulator() {
         lifecycleScope.launch {
             while (true) {
-                // PHASE 1: Cruising (Ghost car is 40 meters ahead, not braking)
-                radarView.activeNodes = listOf(RadarView.RadarNode("7777", 40f, false))
-                radarView.invalidate() // Forces the graphics to redraw
+                // Ghost car cruising 40m ahead as an SUV
+                radarView.activeNodes = listOf(RadarView.RadarNode("7777", 40f, false, VehicleType.SUV))
+                radarView.invalidate()
 
                 delay(8000)
 
-                // PHASE 2: Emergency! (Ghost car suddenly closes the gap to 20 meters and brakes)
+                // Ghost car slams brakes!
                 isShowingAlert = true
-                radarView.activeNodes = listOf(RadarView.RadarNode("7777", 20f, true))
+                radarView.activeNodes = listOf(RadarView.RadarNode("7777", 20f, true, VehicleType.SUV))
                 radarView.invalidate()
 
                 statusText.text = "👻 GHOST CAR 7777 BRAKED HARD! 🚨\nGap closed to 20m!"
                 statusText.setBackgroundColor(Color.parseColor("#CC0000"))
                 statusText.setTextColor(Color.WHITE)
 
-                delay(3000) // Show alert for 3 seconds
+                delay(3000)
 
                 statusText.setBackgroundColor(Color.TRANSPARENT)
                 statusText.setTextColor(Color.WHITE)
@@ -148,17 +171,24 @@ class MainActivity : AppCompatActivity() {
     private fun observeKinematics() {
         lifecycleScope.launch {
             kinematicsEngine.motionState.collect { state ->
-                // Update your car's graphics instantly based on sensors
                 radarView.isEgoBraking = state.isEmergencyBraking
                 radarView.invalidate()
 
                 if (isShowingAlert) return@collect
 
                 val gps = locationTracker.gpsState.value
+
+                // Read the Gyroscope to detect lane changes
+                val maneuverStatus = when {
+                    state.yawRateDegrees > 10f -> "🔄 MERGING LEFT"
+                    state.yawRateDegrees < -10f -> "🔄 MERGING RIGHT"
+                    else -> "⬆️ HOLDING LANE"
+                }
+
                 val status = if (state.isEmergencyBraking) {
-                    "⚠️ YOU ARE BRAKING!\nSpeed: ${gps.speedKmh.toInt()} km/h\nAccel: %.2f m/s²".format(state.longitudinalAcceleration)
+                    "⚠️ YOU ARE BRAKING!\n$maneuverStatus\nSpeed: ${gps.speedKmh.toInt()} km/h"
                 } else {
-                    "✅ Cruising\nSpeed: ${gps.speedKmh.toInt()} km/h\nAccel: %.2f m/s²".format(state.longitudinalAcceleration)
+                    "✅ Cruising\n$maneuverStatus\nSpeed: ${gps.speedKmh.toInt()} km/h"
                 }
                 statusText.text = status
             }
@@ -171,8 +201,9 @@ class MainActivity : AppCompatActivity() {
                 if (packet.hazardFlag.toInt() == 1) {
                     isShowingAlert = true
 
-                    // Add the real networking car to the visual radar at an estimated 25 meters
-                    radarView.activeNodes = listOf(RadarView.RadarNode(packet.nodeId.toString(), 25f, true))
+                    val distanceEst = 25f
+                    // Render incoming real-network cars as standard Sedans for now
+                    radarView.activeNodes = listOf(RadarView.RadarNode(packet.nodeId.toString(), distanceEst, true, VehicleType.SEDAN))
                     radarView.invalidate()
 
                     statusText.text = "🚨 CAR ${packet.nodeId} BRAKED HARD! 🚨\nSpeed dropped to: ${packet.speedKmh} km/h"

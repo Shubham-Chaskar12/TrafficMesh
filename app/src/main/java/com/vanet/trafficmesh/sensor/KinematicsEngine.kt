@@ -8,60 +8,61 @@ import android.hardware.SensorManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.ArrayDeque
+import kotlin.math.abs
 
 class KinematicsEngine(context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val linearAccelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+    private val accelSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+    private val gyroSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
-    private val alpha = 0.25f
-    private var filteredZ = 0.0f
-
-    private val windowCapacity = 13
-    private val sampleWindow = ArrayDeque<Float>(windowCapacity)
-
-    private val emergencyBrakeThreshold = -3.5f
-
+    // Upgraded state to include rotation (Yaw Rate)
     data class MotionState(
-        val longitudinalAcceleration: Float = 0.0f,
+        val longitudinalAcceleration: Float = 0f,
         val isEmergencyBraking: Boolean = false,
-        val sustainedSamplesCount: Int = 0
+        val yawRateDegrees: Float = 0f
     )
 
     private val _motionState = MutableStateFlow(MotionState())
     val motionState: StateFlow<MotionState> = _motionState.asStateFlow()
 
+    private var smoothedAccelY = 0f
+    private val alpha = 0.2f // Low-pass filter constant for accelerometer
+
     fun start() {
-        linearAccelSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
+        accelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
     }
 
     fun stop() {
         sensorManager.unregisterListener(this)
-        sampleWindow.clear()
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null || event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
+        if (event == null) return
 
-        val rawLongitudinal = event.values[2]
+        var currentBraking = _motionState.value.isEmergencyBraking
+        var currentYawRate = _motionState.value.yawRateDegrees
 
-        filteredZ = (alpha * rawLongitudinal) + ((1.0f - alpha) * filteredZ)
-
-        if (sampleWindow.size >= windowCapacity) {
-            sampleWindow.pollFirst()
+        when (event.sensor.type) {
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                // Assuming phone is upright, Y-axis tracks forward/backward acceleration
+                smoothedAccelY = alpha * event.values[1] + (1 - alpha) * smoothedAccelY
+                currentBraking = smoothedAccelY < -4.0f
+            }
+            Sensor.TYPE_GYROSCOPE -> {
+                // Gyroscope outputs radians per second.
+                // Assuming phone is upright, the Y-axis (values[1]) tracks left/right rotation.
+                val yawRateRad = event.values[1]
+                currentYawRate = Math.toDegrees(yawRateRad.toDouble()).toFloat()
+            }
         }
-        sampleWindow.addLast(filteredZ)
 
-        val windowAverage = sampleWindow.sum() / sampleWindow.size
-        val isBrakingHard = windowAverage < emergencyBrakeThreshold
-
+        // Push the combined sensor fusion data to the UI
         _motionState.value = MotionState(
-            longitudinalAcceleration = windowAverage,
-            isEmergencyBraking = isBrakingHard,
-            sustainedSamplesCount = sampleWindow.size
+            longitudinalAcceleration = smoothedAccelY,
+            isEmergencyBraking = currentBraking,
+            yawRateDegrees = currentYawRate
         )
     }
 
